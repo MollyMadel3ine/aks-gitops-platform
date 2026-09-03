@@ -1,0 +1,27 @@
+#Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+
+#Variable files that may contain senstitive values
+*.tfvars
+*.tfvars.json
+!example.tfvars
+
+# Override files (local experiments, never shared)
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# CLI config
+.terraformrc
+terraform.rc
+
+# OS noise
+Thumbs.db
+.DS_Store
+
