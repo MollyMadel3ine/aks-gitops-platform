@@ -1,0 +1,6 @@
+# Namespace for the demo workload - keeps app resources separated from
+# kube-system and provides the deletion boundary for everything Flux manages
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo

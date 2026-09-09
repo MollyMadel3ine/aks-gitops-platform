@@ -18,6 +18,13 @@ resource "azurerm_kubernetes_cluster" "main" {
   resource_group_name = azurerm_resource_group.aks.name
   dns_prefix          = var.cluster_name
 
+  # Pinned so destroy/rebuild cycles are deteministic
+  kubernetes_version = "1.35.7"
+
+  # Node SKU: Standard_D2s_v3 - chosen for quota availability. History:
+  # B2s disallowed in westus2 (SKU restriction), Bsv2 faily allowed but
+  # zero vCPU quota; deployed first on Dv2(had quota), then moved to
+  #Dsv3 - newer generation, 8 GB RAM, cheaper per hour compared to Dv2.  
   default_node_pool {
     name       = "system"
     node_count = 1
