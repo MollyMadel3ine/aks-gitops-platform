@@ -46,15 +46,49 @@ resource "azurerm_kubernetes_cluster" "main" {
 # Existing shared ACR (rg-container-shared) -referenced, never managed here. 
 # Data source = read-only lookup; this config can;t modify or destroy it. 
 data "azurerm_container_registry" "shared" {
-    name = "acrcontainerdemomolly"
-    resource_group_name = "rg-container-shared"
+  name                = "acrcontainerdemomolly"
+  resource_group_name = "rg-container-shared"
 }
 
 # Grant the cluster's kubelet identity pull rights on the shared ACR. 
 # Kubelet identity (not the SystemAssigned control-plane identity) is what
 # nodes authenticate with when pulling images - no ACR admin account needed. 
 resource "azurerm_role_assignment" "acr_pull" {
-    scope = data.azurerm_container_registry.shared.id
-    role_definition_name = "AcrPull"
-    principal_id = azurerm_kubernetes_cluster.main.kubelet_identity[0].object_id
+  scope                = data.azurerm_container_registry.shared.id
+  role_definition_name = "AcrPull"
+  principal_id         = azurerm_kubernetes_cluster.main.kubelet_identity[0].object_id
+}
+
+#Flux via the AKS GitOps extension - Microsoft's first-party integration
+# (the reason Flux won over Argo CD in the design decision). Installs the
+# Flux controllers into the flux-system namespace. 
+resource "azurerm_kubernetes_cluster_extension" "flux" {
+  name           = "flux"
+  cluster_id     = azurerm_kubernetes_cluster.main.id
+  extension_type = "Microsoft.flux"
+}
+
+# Points Flux at this repo's deploy/ folder. From this resource's creation onward,
+# Git is the deployment interface - no kubectl apply, ever. 
+resource "azurerm_kubernetes_flux_configuration" "main" {
+  name       = "aks-gitops"
+  cluster_id = azurerm_kubernetes_cluster.main.id
+  namespace  = "flux-system"
+  scope      = "cluster"
+
+  git_repository {
+    url                      = "https://github.com/MollyMadel3ine/aks-gitops-platform"
+    reference_type           = "branch"
+    reference_value          = "main"
+    sync_interval_in_seconds = 60
+  }
+
+  kustomizations {
+    name                       = "deploy"
+    path                       = "./deploy"
+    sync_interval_in_seconds   = 60
+    garbage_collection_enabled = true
+  }
+
+  depends_on = [azurerm_kubernetes_cluster_extension.flux]
 }
