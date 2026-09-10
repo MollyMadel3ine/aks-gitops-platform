@@ -32,6 +32,7 @@ Part of a portfolio of Azure infrastructure projects:
 - **Single repo, `infra/` + `deploy` folders.** One repo keeps this project navigable. Real-world 
   implementations often split infrastructure and deployment manifests into separate repos with
   separate permissions. The folders mark where the separate repos would be theoretically.
+  -**Cluster-scoped Flux config** Flux config runs cluster-scoped because the desired state includes namespace objects; in a shared cluster, namespace scope per team would be the right posture.
 - **(More to come in future phases.)**
 
 ## Cost notes
