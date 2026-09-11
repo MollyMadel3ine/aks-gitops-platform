@@ -12,4 +12,4 @@ spec:
     app: demo-app
   ports:
     - port: 80
-      targetport: 8000
+      targetPort: 8000
