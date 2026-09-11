@@ -1,6 +1,7 @@
 # Demo workload: public nginx image so the Flux loop is proven in isolation -
-# no image-pull auth in the failure surface. The container-iac FastAPI app
-# (from ACR, via the AcrPull wiring) replaces this in phase 3
+# no image-pull auth in the failure surface. 
+# container-iac FastAPI app from the shared ACR - pulled via the kubelet
+# identity's AcrPull grant (see infra/main.tf)
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -17,7 +18,7 @@ spec:
         app: demo-app
     spec:
       containers:
-        - name: nginx
-          image: nginx:1.27
+        - name: app
+          image: acrcontainerdemomolly.azurecr.io/container-demo:861de1303f910f63c2b3f6e0444e284e30c4c6b2
           ports:
-            - containerPort: 80
+            - containerPort: 8000

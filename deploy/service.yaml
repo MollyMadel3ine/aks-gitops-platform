@@ -1,0 +1,15 @@
+# Stable in-cluster endpoint for the demo pods. ClusterIP (internal-only):
+# the Phase 2 demo is watched via kubectl, so nothing needs internet exposure.
+# Phase 3/4 revisits external access deliberately.
+apiVersion: v1
+kind: Service
+metadata:
+  name:  demo-app
+  namespace: demo
+spec:
+  type: ClusterIP
+  selector:
+    app: demo-app
+  ports:
+    - port: 80
+      targetport: 8000
