@@ -1,42 +1,257 @@
-# AKS GitOps Platform
+# AKS GitOps Platform — Pull-Based Kubernetes Delivery on Azure
 
-A Terraform-provisioned AKS cluster where application deployments happen via
-GitOps: nothing uses "kubectl apply" manually. A controller in the cluster
-(Flux) watches this repo and reconciles the cluster to match it - 
-pull-based delivery, in constrast to the push-based pipelines in my other repos.
+A Terraform-provisioned AKS cluster where application deployments happen via GitOps: 
+nothing uses "kubectl apply" applied manually. A controller in the cluster "Flux" watches 
+this repo and reconciles the cluster to match it - pull based delivery, in contrast to the
+push-based pipelines in my other repos.
 
-Part of a portfolio of Azure infrastructure projects:
-- [azure-webapp-iac](https://github.com/MollyMadel3ine/azure-webapp-iac) — hub-and-spoke landing zone with gated CI/CD
-- [container-app-iac](https://github.com/MollyMadel3ine/container-app-iac) — containerized delivery to Azure Container Apps
-- [azure-sql-cost-analytics](https://github.com/MollyMadel3ine/azure-sql-cost-analytics) — cost analysis of these projects, in SQL  
-- 
+**Portfolio context:** part of a four-repo series —
+[azure-webapp-iac](https://github.com/MollyMadel3ine/azure-webapp-iac) ·
+[container-iac](<!-- full URL -->) ·
+[azure-sql-cost-analytics](<!-- full URL -->)
+
+## Roadmap
+
+- [x] Phase 1 — Cluster via Terraform (AKS, remote state, AcrPull via managed identity)
+- [x] Phase 2 — GitOps controller (Flux via AKS extension, reconciliation loop proven)
+- [ ] Phase 3 — Full loop with the real app *(in progress: app swap done, CI next)*
+- [ ] Phase 4 — Kubernetes-native operations
+
 ## Architecture
 
-*(Diagram coming with Phase 2 - cluster, ACR, Flux, and the deploy repo loop.)*
+The previous repos in thsi portfolio deploy the way most pipelines do: push-based - 
+a pipeline authenticates to Azure and shoves changes at the environment. This repo
+inverts that. The pipeline never touches the cluster. Instead, a controller (Flux)
+runs *inside* the cluster, watches this repository, and continuously reconsiles the
+cluster to match whatever `deploy/` says. The commit is the deployment.
 
-- [ ] **Phase 1 - Cluster via Terraform. ** Single-code AKS (Standard_B2s),
-      managed-identity ACR pull (no admin credentials), remote state./
-- [ ] **Phase 2 - GitOps controller.** Flux watching a `deploy/` folder of
-      Kubernetes manifests; prove the loop: commit -> cluster converges,
-      zero manual applies.
-- [ ] **Phase 3 - Full CI/CD loop.** CI builds the image, pushes it to ACR,
-      bumps the image tag in the deploy manifests via PR; Flux rolls the
-      deployment. Dev/prod namespaces via Kustomize overlays.
-- [ ] **Phase 4 - Kubernetes-native operations.** Probes, resource
-      requests/limits, HPA, Azure Monitor for containers.
+Pull-based delivery allows for 2 things that push-based can't. **Auditability** the cluster can
+always name the exact commit it's running('kubectl get kustomization -A' shows the applied
+revision), so asking 'what is deployed' has a Git answer. **Drift Recovery** anything that changes
+the cluster outside of Git - a manual edit, a deleted object, a full `terraform destroy` - gets
+reconciled back to the repo's desired state automatically. Rebuilding the cluster from nothing
+redeploys the entire workload with zero deploy steps, since Git holds the desired state.
+
+The repo is split along these boundaries: `infra/` is Terraform and own everything Azure - 
+the cluster, the Flux extension, and the pointer telling Flux which repo and path to watch.
+`deploy/` holds Kubernetes manifests and owns everything running *on* the cluster. Terraform
+install the watcher; Git feeds it.
+
+```mermaid
+flowchart LR
+    dev[Developer] -->|git push| repo[GitHub repo]
+    repo -->|watched by| flux[Flux controllers<br/>in cluster]
+    flux -->|reconciles| cluster[AKS cluster]
+    repo -.->|Phase 3: CI builds image| acr[ACR]
+    acr -.->|kubelet identity pulls| cluster
+```
+<!-- Adjust/expand once CI exists — the dotted lines become solid. -->
+
+## The Loop, Proven
+
+<!-- One sentence of setup per image, then let the captions carry it. -->
+
+![Cluster state traceable to the exact commit — pods running alongside the synced Git revision](docs/images/gitops-loop-proof.png)
+
+*Two pods running and the kustomization that put them there: `READY: True`, applied revision pinned to the exact commit SHA*
+
+![Scale-out via commit — replicas 1→2 with no kubectl, no pipeline, no portal](docs/images/gitops-scale-via-commit.png)
+
+*Scaling the pods from 1 to 2 replicas via a git commit - no kubectl, no pipeline, no portal*
+
+![The real app answering through the full chain](docs/images/fastapi-via-gitops.png)
+
+*FastAPI health endpoint — image from shared ACR via kubelet identity, deployed by commit only*
 
 ## Design Decisions
 
-- **Flux over Argo CD.** Lighter footprints and first-party Azure integration
-  (AKS GitOps extension). 
-- **Single repo, `infra/` + `deploy` folders.** One repo keeps this project navigable. Real-world 
-  implementations often split infrastructure and deployment manifests into separate repos with
-  separate permissions. The folders mark where the separate repos would be theoretically.
-  -**Cluster-scoped Flux config** Flux config runs cluster-scoped because the desired state includes namespace objects; in a shared cluster, namespace scope per team would be the right posture.
-- **(More to come in future phases.)**
 
-## Cost notes
 
-The AKS control plane is free; the single B2s node costs roughly $30/month if left running -
-so it isn't left running. `terraform destroy` after each work session; the rebuild is
-one `terraform apply` plus a Flux bootstrap, after that the cluster repopulates its own workloads from Git. Rebuild time: *(measured in phase 2)*.
+### Flux over Argo CD
+Lighter footprints and first-party Azure integration (AKS GitOps extension)
+
+### Azure CNI Overlay over kubenet
+The cluster's `network_profile` had 3 realistic options in 2026: kubenet, traditional
+Azure CNI(every pod gets a real VNet IP) and Azure CNI overlay. Kubenet is on a deprication
+path and the traditional CNI would force subnet sizing to max pods + max nodes up front, which
+makes it outsized for this demo.
+
+CNI Overlay is the current recommended default and takes the middle path: nodes
+get VNet IPs, pods get addresses from a private overlay range (10.244.0.0/16 
+by default) that never touches the VNet address space. Modern CNI behavior,
+no subnet sizing concerns, and it's the networking model that Microsoft is steering
+AKS towards. The visible evidence on the cluster: the `azure-cns` pods in `kube-system`.
+
+### Cluster-scoped Flux configuration
+The azurerm provider defaults a Flux configuration to `namespace` scope - the
+applier service account can only manage objects within a single namespace. That
+default is the least-privilege choice and it surfaced immediately: the first 
+reconciliation failed with an RBAC Forbidden, because `deploy/` starts by creating the `demo`
+namespace itself, and a namespace-scoped applier can't create namespaces - they're cluster
+level objects.
+
+This config runs scope = "cluster" deliberately: the repo owns the whole cluster's
+desired state, namespaces included. That's the right posture for a single-tenant cluster
+where Git is authoritative for everything. In a shared, multi-team cluster the default would
+win instead - one namespace scoped Flux config per team. Scope here is a permission boundary,
+not an address: the config still *lives* in `flux-system` either way; scope governs what it
+can manage.
+
+### Public nginx first, real app second
+Phase 2 proved the reconciliation loop with `nginx:1.27` from Docker Hub, not this portfolio's
+FastAPI app from ACR - deliberately. The first Flux sync had one job: prove the loop mechanics.
+Wiring the real app from the start would have put two unproven systems in the same failure 
+surface - Flux recon *and* ACR image-pull auth via the kubelet identity. A failed first sync would 
+then have two suspects and no way to tell them apart. A public image needs no auth at all, so any 
+Phase 2 failure could only be the loop itself.
+
+It worked as designed: Phase 2's failures (RBAC scope, a YAML syntax error) were all loop mechanics,
+debugged w/o ever wondering whether the registry was the problem. The swap to the real image became 
+Phase 3's opening move- a one-commit change that doubled as the first live test of the AcrPull wiring.
+When the FastAPI pods reached `Running`, that isolated one claim: the managed-identity img pull works.
+
+
+### Node SKU by quota, not preference
+The plan was to use 'Standard_B2s' - the cheapest sensible burstable SKU at ~$30/month when left running.
+The subscription prevented this in 2 different instances:
+
+1. **`Standard_B2s`** - rejected outright: westus2 restricts this SKU for this subscription(`SkuNotAvaiable`). Not
+a quota problem, the size simply isn't offered to this subscription in this region.
+2. **Bsv2 family** `B2s_v2` - avaialble in this region, but the subscription's quota grant for the whole family
+is zero vCPUs. It appears available but can't be used.
+3. **`Standard_D2_v2`** - quota available; this is what phase one shipped on. However, Dv2 is the oldest
+general-purpose generation and carries a legacy price premium. (~ $85-100/month)
+4. **`Standard_D2s_v3`** - the Phase 2 pre-flight swap once `az vm list-usage` confirmed Dsv3 quota:
+newer generation, 8 GB RAM instad of 7, and *cheaper* per hour (~153/month vs ~$183/month for D2_v2, westus,
+PAYG Linux, Sept 2026) than the older SKU it replaced. The swap also turned out to be ahead of a deadline:
+Dv2 is slated for retirement, so the working Phase 1 SKU had a shelf life regardless. 
+
+The monthly figures above are worst-case framing. Under this repo's destroy-between-sessions doctrine
+the node exists for hours, not months -  a two hour build-verify-destroy session costs roughly $0.20.
+The SKU choice matters for correctness and rebuild determinism far more than for cost.
+
+The operational lesson: on a real subscription, instance selection is not "pick a size from the docs."
+It's the intersection of four independent gates - regional SKU availability, per-family quota grants, 
+price by generation and lifecycle (Dv2's pending retirement would have forced this migration eventually;
+the quota gaunlet just forced it early). Only `az vm list-usage --location <region>` , plus a check of the
+retirement announcements tells you what you can actually deploy. The Terraform comment on `vm_size` documents 
+the full path so a rebuild in a different subscription knows why the value is what it is.
+
+### ClusterIP, not LoadBalancer
+The demo's app service is `type: ClusterIP` - reachable only from inside the cluster. The tempting default
+for "Let me see my app" is ` type: LoadBalancer`, which provisions an Azure public IP and exposes the workload
+to the internet in one line of YAML.
+
+This repo doesn't need that line, so it doesn't have it.
+
+1. **Nothing here serves external users.** The audience for this app is the person verifying the GitOps loop
+works. `kubectl port-forward` provides exactly that - an authenticated, on-demand, private tunnel that exists
+only when the terminal session does. Verification traffic doesn't justify a standing public endpoint.
+2. **A LoadBalancer is attack surface plus cost** A public Ip can be scanned on the internet within miniutes of
+existing, and Azure bills for it. An exposure that serves no requirement is pure liability.
+3. **It kept the port bug catchable.** The `targetport` typo was diagnosed by reading the port-forward's 
+resolution line - the tooling for private access doubles as diagnostic tooling.
+
+This is the same posture as the landing zone repo, one layer down the stack: there, the database was 
+reachable only through a private endpoint - never internet-facing; here, the workload is reachable 
+only through the cluster's internal network. Different Azure primitivesd, same rule: **private by
+delfault; every public endpoint must earn it's existence with a requirement. ** Ingress with TLS
+is the documented extension path if this app ever gains real users - a deliberate future decision, 
+not a default accepted silently.
+
+### No kube_config in outputs
+The `azure_kubernetes_cluster` resource exposes a `kube_config_raw` attribute - full cluster admin credentials
+ - and it's common to see it wired into an output for convenience. This repo doesn't do that: outputs are cluster
+*name* and resource-group only, and credentials are fetched on-demand with `az aks get-credentials`, which
+authenticates through the caller's own Azure AD identity. Anything in an output lands in the state file in 
+plaintext, and even marked `sensitive` , that's a standing admin credential sitting in a storage account - 
+when a one-line, identity based alternative exists, the secret shouldn't be stored at all.
+
+## Troubleshooting Log
+
+Every failure this project hit, what it looked like, and - the useful part - *how it was caught*. The
+diagnostic route matters more than the fix: the same error class will recur, and the route is what
+transfers.
+
+| # | Symptom | Root cause | How it was caught |
+|---|---------|-----------|-------------------|
+| 1 | `undeclared resource` on plan | `azure_` vs `azurerm_` typo | Error text quotes the misspelling verbatim |
+| 2 | <!-- SKU error --> | B2s restricted in westus2 | `az vm list-skus` restrictions column |
+| 3 | <!-- quota error --> | Zero Bsv2-family vCPU quota | `az vm list-usage` |
+| 4 | 409 on Flux extension | `Microsoft.KubernetesConfiguration` provider unregistered | Error names the namespace; one-time `az provider register` |
+| 5 | Kustomization `READY: False`, Forbidden | Flux config defaulted to namespace scope; can't manage namespaces | `kubectl get kustomization -A` status text |
+| 6 | Deployment dry-run failed, `expected list, got map` | `-containerPort` — missing space after YAML dash | Error quotes the fused key |
+| 7 | Connection refused through Service; pods Running | `targetport` lowercase — silently defaulted to port 80 | Port-forward's `-> 80` resolution line |
+| 8 | `terraform destroy`: "no objects" | Ran from repo root, not `infra/` | Message contradicted known reality; `pwd` check |
+
+### Subscription gates: a field guide
+Three different ways a subscription says "no," hit in sequence during Phase 1–2.
+None are code bugs; all are invisible until first contact with a real subscription.
+
+| # | Error | What it actually means | Fix |
+|---|-------|------------------------|-----|
+| 1 | `SkuNotAvailable` for `Standard_B2s` | Regional SKU restriction — the size isn't offered to this subscription in westus2 at all | Pick a different SKU (see decision log: SKU by quota) |
+| 2 | Quota check: Bsv2 family limit = 0 vCPUs | SKU is offered, but the subscription's quota grant for the family is zero | `az vm list-usage --location westus2` before choosing; land on a family with quota |
+| 3 | `409 MissingSubscriptionRegistration` for `Microsoft.KubernetesConfiguration` | The GitOps extension's resource provider was never registered — the API namespace is dormant until first use | `az provider register --namespace Microsoft.KubernetesConfiguration`, wait for `Registered`, re-apply |
+
+Terraform silently auto-registers the *common* providers, which is why four
+prior repos never surfaced #3. Fresh-subscription prerequisite: the register
+command above is in the rebuild ritual.
+
+### One-character bugs, three different detection routes
+
+| Bug | Failure mode | How it was caught |
+|-----|--------------|-------------------|
+| Typo in the Flux Terraform resources | Loud — plan/apply error names the line | Read the error; it points at itself |
+| `-containerPort` (stray hyphen in deployment.yaml) | Rejected manifest — Flux won't apply it | `kubectl get kustomizations -n flux-system` status message quoted the schema violation |
+| `targetport` (lowercase, should be `targetPort`) | **Silent** — legal YAML, unknown field ignored, Service defaults targetPort to port; pods run, traffic dies | Behavioral: `kubectl port-forward` output's resolution line showed the port mismatch |
+
+The progression is the lesson: error text → controller status → observed
+behavior. The first two failure classes announce themselves with decreasing
+volume; the third says nothing and has to be *noticed*. Kubernetes' schema
+tolerance means a typo can demote a field to a no-op — `kubectl explain` or
+paying attention to what the tooling resolves is the countermeasure.
+
+### Operational reflexes (learned the hard way)
+
+| Symptom | Root cause | Reflex earned |
+|---------|-----------|---------------|
+| `dial tcp: lookup ...azmk8s.io: no such host` from kubectl | Stale kubeconfig — pointing at a destroyed cluster's dead hostname | Rebuild ritual is always the pair: `terraform apply` → `az aks get-credentials --overwrite-existing`. Hostname in the error not matching a live cluster = staleness, ~95% of the time in a destroy/rebuild workflow |
+| Terraform behaving against the wrong state | Running from the repo root instead of `infra/` | Check the prompt's directory before any terraform command; `terraform plan` (free, safe) any time the session loses track of reality |
+| `No resources found in demo namespace` after first Flux sync | Flux configuration scoped to `namespace` (provider default) — the applier lacked RBAC to create namespace-level objects from Git | `scope = "cluster"` on the flux configuration; surfaced as an RBAC Forbidden in the kustomization status |
+
+## Rebuild Ritual
+
+Destroying the environment costs nothing to undo: two commands and ~10 minutes stand between an empty subscription
+and the full working stack, app included.
+
+```powershell
+cd infra
+terraform apply                         
+az aks get-credentials `
+  --resource-group $(terraform output -raw resource_group_name) `
+  --name $(terraform output -raw cluster_name) `
+  --overwrite-existing
+kubectl get pods -n demo -w            
+```
+
+No redeploy step exists because the cluster was never the source of truth - Git held the desired state the whole time, 
+and a fresh cluster reconciles to it.
+
+**Fresh-subscription prerequisite:** `az provider register --namespace Microsoft.KubernetesConfiguration` (one-time; the Flux extension 409s without it).
+
+## Cost Notes
+
+The control plane is free, node ~$153/mo if left running, destroy-between-sessions makes a 2-hour session ~$0.42.
+A forgotten cluster left running overnight = ~$2.51 
+State storage + shared ACR (Basic) persist at ~$5-6/mo total. -->
+
+## Repo Structure
+
+```
+aks-gitops-platform/
+├── infra/          # Terraform — the cluster and everything Azure
+├── deploy/         # Kubernetes manifests — what Flux keeps true
+└── docs/images/    # proof
+```
+That's the repo's whole architecture: Terraform installs the watcher; Git feeds it. 
