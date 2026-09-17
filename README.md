@@ -167,6 +167,34 @@ authenticates through the caller's own Azure AD identity. Anything in an output 
 plaintext, and even marked `sensitive` , that's a standing admin credential sitting in a storage account - 
 when a one-line, identity based alternative exists, the secret shouldn't be stored at all.
 
+### CI design: Actions, variables and SHA tags
+Three decsisions but one theme - the delivery chain should contain nothing worth stealing and nothing that can drift.
+
+**GitHub Actions over Az DevOps** The rest of this portfolio demonstrates utilizing Az DevOps: webapp-iac runs a 
+multi-stage YAML pipeline with approval gates, and container-app-iac deepens it. GitHub Actions was the gap and
+it's also native to the repository, so the CI joins the loop instead of reaching into it from outside. The main
+deciding factor was authentication: Action's first-class OIDC federation with Entra means the pipeline holds no
+credential at all. Az DevOps remains a defensible alternative - the org and service principal already exist 
+from prior repos - but it would have necessitated a stored secret or service connection where this design 
+needed neither. 
+
+**Repository variables, not secrets** The workflow authenticates with three values: client ID, tenant ID, 
+subscription ID. All three live in GitHub as plain `vars` not `secrets` - deliberately. They are identitfiers,
+not keys: knowing them gets an attacker nothing without the ability to mint a token that GitHub will only issue
+to this repo on `main`, and that Entra will only exchange against the pinned, federated subject. Storing them as 
+secrets implies they need protecting, and implying that would misstate the security model. The delivery chain
+contains zero secrets; the variables tab is the proof.
+
+**Commit-SHA tags, never `latest`** Every image is tagged with the full 40-character SHA of the commit that 
+built it, and no tag is reused or overwritten. This is not a style preference - it's what makes the repo's
+central claim literally true. GitOps promises that Git describes exactly what runs; a mutable tag like `latest`
+can break that promise - with the manifest saying one thing while the registery quietly serves another. Immutable
+tags also make the coming tag-bump flow meaningful: a deployment change is a visible diff in `deploy/`, reviewed 
+like any other code, traceable from a running pod back to the exact commit that produced it.
+
+The generalizable lesson: authentication you don't store can't leak, values that aren't secret shouldn't pretend 
+to be and imutable tags are what let Git tell the truth.
+
 ## Troubleshooting Log
 
 Every failure this project hit, what it looked like, and - the useful part - *how it was caught*. The
