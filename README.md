@@ -195,6 +195,10 @@ like any other code, traceable from a running pod back to the exact commit that 
 The generalizable lesson: authentication you don't store can't leak, values that aren't secret shouldn't pretend 
 to be and imutable tags are what let Git tell the truth.
 
+### identity/federated-credential.json
+Created imperatively via `az ad app federated-credential create` kept as the record of the trust boundary; not
+applied by any automation.
+
 ## Troubleshooting Log
 
 Every failure this project hit, what it looked like, and - the useful part - *how it was caught*. The
