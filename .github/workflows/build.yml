@@ -8,8 +8,8 @@ on:
       - ".github/workflows/build.yml"
 
 permissions:
-  id-token: write #mint the OIDC token
-  contents: read
+  id-token: write   # mint the OIDC token
+  contents: read    # checkout
 
 jobs:
   build-push:
@@ -24,12 +24,12 @@ jobs:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      
+
       - name: ACR login
         run: az acr login --name ${{ vars.ACR_LOGIN_SERVER }}
 
-      - name: Build image 
+      - name: Build image
         run: docker build -t ${{ vars.ACR_LOGIN_SERVER }}/fastapi-app:${{ github.sha }} ./app
 
-      -name: Push image
-       run: docker push ${{ vars.ACR_LOGIN_SERVER }}/fastapi-app:${{ github.sha }}
+      - name: Push image
+        run: docker push ${{ vars.ACR_LOGIN_SERVER }}/fastapi-app:${{ github.sha }}
