@@ -220,6 +220,9 @@ paying attention to what the tooling resolves is the countermeasure.
 | Terraform behaving against the wrong state | Running from the repo root instead of `infra/` | Check the prompt's directory before any terraform command; `terraform plan` (free, safe) any time the session loses track of reality |
 | `No resources found in demo namespace` after first Flux sync | Flux configuration scoped to `namespace` (provider default) — the applier lacked RBAC to create namespace-level objects from Git | `scope = "cluster"` on the flux configuration; surfaced as an RBAC Forbidden in the kustomization status |
 
+### detection route: 
+AADSTS error code carrying the presented assertion; root cause: GitHub's subject claim format embeds immutable IDs, defeating name-based trust records; fix: pin the federated credential to the ID-enriched subject.
+
 ## Rebuild Ritual
 
 Destroying the environment costs nothing to undo: two commands and ~10 minutes stand between an empty subscription
