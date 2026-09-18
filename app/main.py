@@ -9,7 +9,7 @@ variables, not in Terraform state for this app's access.
 /health   - liveness + runtime metadata (unchanged contract)
 /identity - the Phase 4 proof: reads a secret from Key Vault and
             increments a visit counter blob in Storage, reporting
-            both — all as the managed identity.
+            them — all as the managed identity.
 """
 
 import os
