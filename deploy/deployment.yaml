@@ -19,6 +19,6 @@ spec:
     spec:
       containers:
         - name: app
-          image: .azurecr.io/fastapi-app:be86e4d37018022d7bd91a3bc840f23a343f7f8f
+          image: .azurecr.io/fastapi-app:00d560e9724564ecbca08c05e39f53dcd8c077d5
           ports:
             - containerPort: 8000
