@@ -34,7 +34,7 @@ jobs:
       - name: Push image
         run: docker push ${{ vars.ACR_LOGIN_SERVER }}/fastapi-app:${{ github.sha }}
 
-  bump-manaifest:
+  bump-manifest:
     needs: build-push
     runs-on: ubuntu-latest
     permissions:
