@@ -8,8 +8,8 @@ on:
       - ".github/workflows/build.yml"
 
 permissions:
-  id-token: write   # mint the OIDC token
-  contents: read    # checkout
+  id-token: write # mint the OIDC token
+  contents: read # checkout
 
 jobs:
   build-push:
@@ -33,3 +33,32 @@ jobs:
 
       - name: Push image
         run: docker push ${{ vars.ACR_LOGIN_SERVER }}/fastapi-app:${{ github.sha }}
+
+  bump-manaifest:
+    needs: build-push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write #push the bump branch
+      pull-requests: write #open the PR
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bump image tag in deploy manifest
+        run: |
+          sed -i "s|image: .*azurecr.io/.*|image: ${{ vars.ACR_NAME }}.azurecr.io/fastapi-app:${{ github.sha }}|" deploy/deployment.yaml
+
+      - name: Open pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BRANCH="deploy/bump-${GITHUB_SHA::7}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add deploy/deployment.yaml
+          git commit -m "Deploy fastapi-app:${GITHUB_SHA::7}"
+          git push origin "$BRANCH"
+          gh pr create \
+            --title "Deploy fastapi-app:${GITHUB_SHA::7}" \
+            --body "Automated image bump from CI run ${{ github.run_id }}. Merging this PR is the deployment: Flux reconciles the cluster to match." \
+            --base main
