@@ -199,6 +199,18 @@ to be and imutable tags are what let Git tell the truth.
 Created imperatively via `az ad app federated-credential create` kept as the record of the trust boundary; not
 applied by any automation.
 
+### PR-based image-bumps - the merge is the deployment
+
+Phase 3's final step had two ways to land the new image tag in `deploy/`: the CI workflow commits directly to main, or it opens a pull request that a human merges. This repo uses the PR.
+
+Direct commit is simpler: fewer steps, fully unattended, and a legitimate pattern - it's how many GitOps shops run their dev environments. But this cluster is the repo's only environment, so it gets the production treatment: every deploy is a reviewed, one-line diff. Merging that diff is the deployment action - no kubectl, no pipeline apply step, no pipeline credentials that could deploy outside the review path.
+
+The PR is opened with the wrokflow's built-in `GITHUB_TOKEN` and the `gh` CLI - not 3rd party action, no new secrets, continuing the chain that started with OIDC federation: nothing in this pipeline holds a stored credential.
+
+The bump job lives in the same workflow as the build (`needs: build`), so one file reads top to bottom for the delivery story. A paths filter (`app/**`) keeps merged bumps from retriggering the build - CI owns `app/`, flux owns `deploy/`, and the trigger encodes that boundary.
+
+This closes a thread that runs through the porfolio: infrastructure changes gate behind approval (azure-webapp-iac), and now deployments gate behind review here. Nothing reaches Azure - resources or workloads- without a human approving a diff.
+
 ## Troubleshooting Log
 
 Every failure this project hit, what it looked like, and - the useful part - *how it was caught*. The
