@@ -14,7 +14,7 @@ push-based pipelines in my other repos.
 
 - [x] Phase 1 — Cluster via Terraform (AKS, remote state, AcrPull via managed identity)
 - [x] Phase 2 — GitOps controller (Flux via AKS extension, reconciliation loop proven)
-- [ ] Phase 3 — Full loop with the real app *(in progress: app swap done, CI next)*
+- [x] Phase 3 — Full loop with the real app *(in progress: app swap done, CI next)*
 - [ ] Phase 4 — Kubernetes-native operations
 
 ## Architecture
