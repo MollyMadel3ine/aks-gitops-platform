@@ -47,9 +47,9 @@ flowchart LR
 ```
 <!-- Adjust/expand once CI exists — the dotted lines become solid. -->
 
-## The Loop, Proven
+## The Loop, End to End
 
-<!-- One sentence of setup per image, then let the captions carry it. -->
+A code push to `app/**` reaches the cluster with no human touching kubectl: CI builds the image, pushes it to ACR with the git SHA as the tag, and opens a pull request bumping the image tag in `deploy/`. The merge is the deployment - Flux sees the new manifest on main and reconciles the cluster to match. Zero stored credentials anywhere in the chain: the build authenticates to Azure via OIDC federation, and the PR is opened with the workflow's built-in `GITHUB_TOKEN`.
 
 ![Cluster state traceable to the exact commit — pods running alongside the synced Git revision](docs/images/gitops-loop-proof.png)
 
@@ -63,8 +63,12 @@ flowchart LR
 
 *FastAPI health endpoint — image from shared ACR via kubelet identity, deployed by commit only*
 
-## Design Decisions
+![Workflow-opened PR bumping the image tag](docs/images/gitops-loop-bump-pr.png)
 
+*The workflow-opened pull request changes exactly one line - the image tag, old SHA to new - so every deployment lands as a reviewed diff.*
+
+
+## Design Decisions
 
 
 ### Flux over Argo CD
