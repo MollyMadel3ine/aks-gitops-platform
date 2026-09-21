@@ -19,6 +19,6 @@ spec:
     spec:
       containers:
         - name: app
-          image: acrcontainerdemomolly.azurecr.io/fastapi-app:2b0a15314f21b248e397b27fae6f5af04672057c
+          image: acrcontainerdemomolly.azurecr.io/fastapi-app:dee6985ca06585cdf9c0e3dd20646859e39af26e
           ports:
             - containerPort: 8000
