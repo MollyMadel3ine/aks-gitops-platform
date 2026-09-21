@@ -271,6 +271,18 @@ paying attention to what the tooling resolves is the countermeasure.
 ### detection route: 
 AADSTS error code carrying the presented assertion; root cause: GitHub's subject claim format embeds immutable IDs, defeating name-based trust records; fix: pin the federated credential to the ID-enriched subject.
 
+### `flux: command not found` - controller in-clsuter don't equal CLI on the workstation
+
+**Symptom:** Attempting `flux reconcile kustomization` during the loop demo failed with command-not-found, despite Flux demonstrably running - the cluster had been reconciling from Git for two phases.
+
+**Cause:** Flux was installed via the AKS GitOps extension (`Microsoft.KubernentesConfiguration`), which deploys the Flux *controllers* into the cluster but installs nothing on the local machine. The `flux` CLI is a separate, client-side tool - the same relationship as kubectl to the API server. Two phases of successful reconciliation never surfaced this because the loop is pull-based: the controllers act on Git alone and no local command is ever required.
+
+**Resolution:** No install needed - both operations have no-CLI equivalents already on the workstation:
+- Force a reconcile: `az k8s-configuration flux kustomization update` (or simply wait out the sync interval - the controllers poll on their own)
+- Inspect sync state: `kubectl get kustomizations -A` and `kubectl get gitrepositories -A`, since Flux exposes it's state as ordinary Kubernetes cutsom resources.
+  
+**Takeaway:** The extension path trades the vendor CLI for Azure-native tooling. That's consistent with this repo's design - Flux managed through Terraform and `az`, not hand-installed - so the missing CLI is a feature of the choice, not a gap. The `flux` CLI remains worth installing on a real workstation for it's richer diagnositcs (`flux logs`, `flux tree`).
+
 ## Rebuild Ritual
 
 Destroying the environment costs nothing to undo: two commands and ~10 minutes stand between an empty subscription
