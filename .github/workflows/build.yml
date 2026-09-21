@@ -45,7 +45,7 @@ jobs:
 
       - name: Bump image tag in deploy manifest
         run: |
-          sed -i "s|image: .*azurecr.io/.*|image: ${{ vars.ACR_NAME }}.azurecr.io/fastapi-app:${{ github.sha }}|" deploy/deployment.yaml
+          sed -i "s|image: .*|image: ${{ vars.ACR_LOGIN_SERVER }}/fastapi-app:${{ github.sha }}|" deploy/deployment.yaml
 
       - name: Open pull request
         env:
@@ -62,3 +62,10 @@ jobs:
             --title "Deploy fastapi-app:${GITHUB_SHA::7}" \
             --body "Automated image bump from CI run ${{ github.run_id }}. Merging this PR is the deployment: Flux reconciles the cluster to match." \
             --base main
+
+      - name: Fail if ACR_LOGIN_SERVER is unset
+        run: |
+          if [ -z "${{ vars.ACR_LOGIN_SERVER }}" ]; then
+            echo "::error::Repository variable ACR_LOGIN_SERVER is not set"
+            exit 1
+          fi
