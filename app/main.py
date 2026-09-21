@@ -7,7 +7,7 @@ keys, or passwords anywhere: not in code, not in environment
 variables, not in Terraform state for this app's access.
 
 /health   - liveness + runtime metadata (unchanged contract)
-/identity - the Phase 4 proof: reads a secret from Key Vault and
+/identity - the Phase Four proof: reads a secret from Key Vault and
             increments a visit counter blob in Storage, reporting
             them — all as the managed identity.
 """
