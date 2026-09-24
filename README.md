@@ -223,6 +223,12 @@ The CPU request is also sized for the HPA. Utilization is calculated as a percen
 
 Memory has a 128Mi limit, roughly 2.7 times idle usage, as a cap against leaks: exceeding it get the container OOMKilled and restarted, a visible failure rather than a slow one. CPU is deliberately left unlimited. CPU limits throttle rather than kill, which tends to surface as latency that's hard to diagnose; the request already guarentees the pod its share of the node.
 
+### Readiness and liveness probes on /health
+
+Readiness gates traffic: a pod is added to the Service's endpoints only after /health responds, so rolling updates never route requests to a pod that is still starting. It checks early and often (after 5s, every 5s) so new pods join quickly.
+
+Liveness restarts a hung process. It waits longer before it's first check (15s) and needs three consecutive failures (~45s) befor restarting, so a slow start or a single slow response doesn't cause a restart. It checks only the app itself; tying liveness to an external dependency would restart healthy pods during an outage they can't fix. 
+
 
 ## Troubleshooting Log
 
