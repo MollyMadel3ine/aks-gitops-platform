@@ -15,7 +15,7 @@ push-based pipelines in my other repos.
 - [x] Phase 1 — Cluster via Terraform (AKS, remote state, AcrPull via managed identity)
 - [x] Phase 2 — GitOps controller (Flux via AKS extension, reconciliation loop proven)
 - [x] Phase 3 — Full loop with the real app *(in progress: app swap done, CI next)*
-- [ ] Phase 4 — Kubernetes-native operations
+- [ ] Phase 4 — *In progress* Kubernetes-native operations
 
 ## Architecture
 
@@ -215,6 +215,15 @@ The bump job lives in the same workflow as the build (`needs: build`), so one fi
 
 This closes a thread that runs through the porfolio: infrastructure changes gate behind approval (azure-webapp-iac), and now deployments gate behind review here. Nothing reaches Azure - resources or workloads- without a human approving a diff.
 
+### Resource Requests from observed usage, no CPU limit
+
+Requests were set from measured idle usage rather than guessed. With the cluster rebuilt, `kubectl top pods` showed each replica at 2m CPU and 47Mi memory, so the container requests 50m CPU and 64Mi memory, leaving headroom for real traffic.
+
+The CPU request is also sized for the HPA. Utilization is calculated as a percentage of the request, so a modest request means a load test can meaningfully cross the scaling target; an oversized request would leave the HPA with nothing to react to.
+
+Memory has a 128Mi limit, roughly 2.7 times idle usage, as a cap against leaks: exceeding it get the container OOMKilled and restarted, a visible failure rather than a slow one. CPU is deliberately left unlimited. CPU limits throttle rather than kill, which tends to surface as latency that's hard to diagnose; the request already guarentees the pod its share of the node.
+
+
 ## Troubleshooting Log
 
 Every failure this project hit, what it looked like, and - the useful part - *how it was caught*. The
@@ -348,6 +357,9 @@ and a fresh cluster reconciles to it.
 The control plane is free, node ~$153/mo if left running, destroy-between-sessions makes a 2-hour session ~$0.42.
 A forgotten cluster left running overnight = ~$2.51 
 State storage + shared ACR (Basic) persist at ~$5-6/mo total. -->
+
+Container Insights adds two agent pods(`ama-logs` DaemonSet and ReplicaSet), using about 22m CPU
+and 350Mi memory combined on the single node, plus Log Analytics ingestion charges, which stay small under the destroy-between-sessions workflow.
 
 ## Repo Structure
 
