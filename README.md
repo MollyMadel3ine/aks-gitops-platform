@@ -15,7 +15,7 @@ push-based pipelines in my other repos.
 - [x] Phase 1 — Cluster via Terraform (AKS, remote state, AcrPull via managed identity)
 - [x] Phase 2 — GitOps controller (Flux via AKS extension, reconciliation loop proven)
 - [x] Phase 3 — Full loop with the real app *(in progress: app swap done, CI next)*
-- [ ] Phase 4 — Kubernetes-native operations
+- [ ] Phase 4 — *In progress* Kubernetes-native operations
 
 ## Architecture
 
@@ -215,32 +215,41 @@ The bump job lives in the same workflow as the build (`needs: build`), so one fi
 
 This closes a thread that runs through the porfolio: infrastructure changes gate behind approval (azure-webapp-iac), and now deployments gate behind review here. Nothing reaches Azure - resources or workloads- without a human approving a diff.
 
+### Resource Requests from observed usage, no CPU limit
+
+Requests were set from measured idle usage rather than guessed. With the cluster rebuilt, `kubectl top pods` showed each replica at 2m CPU and 47Mi memory, so the container requests 50m CPU and 64Mi memory, leaving headroom for real traffic.
+
+The CPU request is also sized for the HPA. Utilization is calculated as a percentage of the request, so a modest request means a load test can meaningfully cross the scaling target; an oversized request would leave the HPA with nothing to react to.
+
+Memory has a 128Mi limit, roughly 2.7 times idle usage, as a cap against leaks: exceeding it get the container OOMKilled and restarted, a visible failure rather than a slow one. CPU is deliberately left unlimited. CPU limits throttle rather than kill, which tends to surface as latency that's hard to diagnose; the request already guarentees the pod its share of the node.
+
+
 ## Troubleshooting Log
 
 Every failure this project hit, what it looked like, and - the useful part - *how it was caught*. The
 diagnostic route matters more than the fix: the same error class will recur, and the route is what
 transfers.
 
-| # | Symptom | Root cause | How it was caught |
-|---|---------|-----------|-------------------|
-| 1 | `undeclared resource` on plan | `azure_` vs `azurerm_` typo | Error text quotes the misspelling verbatim |
-| 2 | <!-- SKU error --> | B2s restricted in westus2 | `az vm list-skus` restrictions column |
-| 3 | <!-- quota error --> | Zero Bsv2-family vCPU quota | `az vm list-usage` |
-| 4 | 409 on Flux extension | `Microsoft.KubernetesConfiguration` provider unregistered | Error names the namespace; one-time `az provider register` |
-| 5 | Kustomization `READY: False`, Forbidden | Flux config defaulted to namespace scope; can't manage namespaces | `kubectl get kustomization -A` status text |
-| 6 | Deployment dry-run failed, `expected list, got map` | `-containerPort` — missing space after YAML dash | Error quotes the fused key |
-| 7 | Connection refused through Service; pods Running | `targetport` lowercase — silently defaulted to port 80 | Port-forward's `-> 80` resolution line |
-| 8 | `terraform destroy`: "no objects" | Ran from repo root, not `infra/` | Message contradicted known reality; `pwd` check |
+| #   | Symptom                                             | Root cause                                                        | How it was caught                                          |
+| --- | --------------------------------------------------- | ----------------------------------------------------------------- | ---------------------------------------------------------- |
+| 1   | `undeclared resource` on plan                       | `azure_` vs `azurerm_` typo                                       | Error text quotes the misspelling verbatim                 |
+| 2   | <!-- SKU error -->                                  | B2s restricted in westus2                                         | `az vm list-skus` restrictions column                      |
+| 3   | <!-- quota error -->                                | Zero Bsv2-family vCPU quota                                       | `az vm list-usage`                                         |
+| 4   | 409 on Flux extension                               | `Microsoft.KubernetesConfiguration` provider unregistered         | Error names the namespace; one-time `az provider register` |
+| 5   | Kustomization `READY: False`, Forbidden             | Flux config defaulted to namespace scope; can't manage namespaces | `kubectl get kustomization -A` status text                 |
+| 6   | Deployment dry-run failed, `expected list, got map` | `-containerPort` — missing space after YAML dash                  | Error quotes the fused key                                 |
+| 7   | Connection refused through Service; pods Running    | `targetport` lowercase — silently defaulted to port 80            | Port-forward's `-> 80` resolution line                     |
+| 8   | `terraform destroy`: "no objects"                   | Ran from repo root, not `infra/`                                  | Message contradicted known reality; `pwd` check            |
 
 ### Subscription gates: a field guide
 Three different ways a subscription says "no," hit in sequence during Phase 1–2.
 None are code bugs; all are invisible until first contact with a real subscription.
 
-| # | Error | What it actually means | Fix |
-|---|-------|------------------------|-----|
-| 1 | `SkuNotAvailable` for `Standard_B2s` | Regional SKU restriction — the size isn't offered to this subscription in westus2 at all | Pick a different SKU (see decision log: SKU by quota) |
-| 2 | Quota check: Bsv2 family limit = 0 vCPUs | SKU is offered, but the subscription's quota grant for the family is zero | `az vm list-usage --location westus2` before choosing; land on a family with quota |
-| 3 | `409 MissingSubscriptionRegistration` for `Microsoft.KubernetesConfiguration` | The GitOps extension's resource provider was never registered — the API namespace is dormant until first use | `az provider register --namespace Microsoft.KubernetesConfiguration`, wait for `Registered`, re-apply |
+| #   | Error                                                                         | What it actually means                                                                                       | Fix                                                                                                   |
+| --- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------- |
+| 1   | `SkuNotAvailable` for `Standard_B2s`                                          | Regional SKU restriction — the size isn't offered to this subscription in westus2 at all                     | Pick a different SKU (see decision log: SKU by quota)                                                 |
+| 2   | Quota check: Bsv2 family limit = 0 vCPUs                                      | SKU is offered, but the subscription's quota grant for the family is zero                                    | `az vm list-usage --location westus2` before choosing; land on a family with quota                    |
+| 3   | `409 MissingSubscriptionRegistration` for `Microsoft.KubernetesConfiguration` | The GitOps extension's resource provider was never registered — the API namespace is dormant until first use | `az provider register --namespace Microsoft.KubernetesConfiguration`, wait for `Registered`, re-apply |
 
 Terraform silently auto-registers the *common* providers, which is why four
 prior repos never surfaced #3. Fresh-subscription prerequisite: the register
@@ -248,11 +257,11 @@ command above is in the rebuild ritual.
 
 ### One-character bugs, three different detection routes
 
-| Bug | Failure mode | How it was caught |
-|-----|--------------|-------------------|
-| Typo in the Flux Terraform resources | Loud — plan/apply error names the line | Read the error; it points at itself |
-| `-containerPort` (stray hyphen in deployment.yaml) | Rejected manifest — Flux won't apply it | `kubectl get kustomizations -n flux-system` status message quoted the schema violation |
-| `targetport` (lowercase, should be `targetPort`) | **Silent** — legal YAML, unknown field ignored, Service defaults targetPort to port; pods run, traffic dies | Behavioral: `kubectl port-forward` output's resolution line showed the port mismatch |
+| Bug                                                | Failure mode                                                                                                | How it was caught                                                                      |
+| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| Typo in the Flux Terraform resources               | Loud — plan/apply error names the line                                                                      | Read the error; it points at itself                                                    |
+| `-containerPort` (stray hyphen in deployment.yaml) | Rejected manifest — Flux won't apply it                                                                     | `kubectl get kustomizations -n flux-system` status message quoted the schema violation |
+| `targetport` (lowercase, should be `targetPort`)   | **Silent** — legal YAML, unknown field ignored, Service defaults targetPort to port; pods run, traffic dies | Behavioral: `kubectl port-forward` output's resolution line showed the port mismatch   |
 
 The progression is the lesson: error text → controller status → observed
 behavior. The first two failure classes announce themselves with decreasing
@@ -262,11 +271,11 @@ paying attention to what the tooling resolves is the countermeasure.
 
 ### Operational reflexes (learned the hard way)
 
-| Symptom | Root cause | Reflex earned |
-|---------|-----------|---------------|
-| `dial tcp: lookup ...azmk8s.io: no such host` from kubectl | Stale kubeconfig — pointing at a destroyed cluster's dead hostname | Rebuild ritual is always the pair: `terraform apply` → `az aks get-credentials --overwrite-existing`. Hostname in the error not matching a live cluster = staleness, ~95% of the time in a destroy/rebuild workflow |
-| Terraform behaving against the wrong state | Running from the repo root instead of `infra/` | Check the prompt's directory before any terraform command; `terraform plan` (free, safe) any time the session loses track of reality |
-| `No resources found in demo namespace` after first Flux sync | Flux configuration scoped to `namespace` (provider default) — the applier lacked RBAC to create namespace-level objects from Git | `scope = "cluster"` on the flux configuration; surfaced as an RBAC Forbidden in the kustomization status |
+| Symptom                                                      | Root cause                                                                                                                       | Reflex earned                                                                                                                                                                                                       |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `dial tcp: lookup ...azmk8s.io: no such host` from kubectl   | Stale kubeconfig — pointing at a destroyed cluster's dead hostname                                                               | Rebuild ritual is always the pair: `terraform apply` → `az aks get-credentials --overwrite-existing`. Hostname in the error not matching a live cluster = staleness, ~95% of the time in a destroy/rebuild workflow |
+| Terraform behaving against the wrong state                   | Running from the repo root instead of `infra/`                                                                                   | Check the prompt's directory before any terraform command; `terraform plan` (free, safe) any time the session loses track of reality                                                                                |
+| `No resources found in demo namespace` after first Flux sync | Flux configuration scoped to `namespace` (provider default) — the applier lacked RBAC to create namespace-level objects from Git | `scope = "cluster"` on the flux configuration; surfaced as an RBAC Forbidden in the kustomization status                                                                                                            |
 
 ### detection route: 
 AADSTS error code carrying the presented assertion; root cause: GitHub's subject claim format embeds immutable IDs, defeating name-based trust records; fix: pin the federated credential to the ID-enriched subject.
@@ -282,6 +291,46 @@ AADSTS error code carrying the presented assertion; root cause: GitHub's subject
 - Inspect sync state: `kubectl get kustomizations -A` and `kubectl get gitrepositories -A`, since Flux exposes it's state as ordinary Kubernetes cutsom resources.
   
 **Takeaway:** The extension path trades the vendor CLI for Azure-native tooling. That's consistent with this repo's design - Flux managed through Terraform and `az`, not hand-installed - so the missing CLI is a feature of the choice, not a gap. The `flux` CLI remains worth installing on a real workstation for it's richer diagnositcs (`flux logs`, `flux tree`).
+
+### `InvalidImageName` after rebuild — a variable that never existed
+
+**Symptom:** After rebuilding the cluster from zero, the app pods sat in
+`InvalidImageName`. The manifest's image line on main read
+`.azurecr.io/fastapi-app:<sha>` — registry name missing, leading dot,
+unparseable.
+
+**Cause:** The bump job's sed built the image reference from
+`${{ vars.ACR_NAME }}` — a repository variable that was never defined.
+The build job had always used the correctly-named `ACR_LOGIN_SERVER`;
+the bump job was written against a variable that didn't exist. GitHub
+Actions does not error on a reference to an undefined variable — it
+expands to empty string — so the sed wrote the broken line and the job
+went green. Every bump the job ever produced was invalid, from its
+first run.
+
+**Why it stayed hidden — twice over:** Kubernetes rolling updates keep
+the old ReplicaSet serving when the new one cannot start, so the
+cluster stayed healthy-looking after every broken bump. And the
+service's label selector still matched the old pods, so a
+post-"deployment" health check succeeded — answered by the previous
+workload. A green pipeline, running pods, and a 200 from `/health` all
+coexisted with a manifest that could never deploy. Only a rebuild from
+zero — no prior ReplicaSet to hide behind — forced the defect into
+the open.
+
+**Resolution:** Unified both jobs on the one variable that exists
+(`ACR_LOGIN_SERVER`, the full login server; the sed no longer appends
+`.azurecr.io`), and added a guard step that fails the job loudly if
+the variable is empty. Verified end to end: version bump → build →
+PR with a valid image line → merge → Flux convergence → `/health`
+returning the new version.
+
+**Takeaway:** Actions expands undefined `vars.*` references silently —
+any job that interpolates a variable into a file needs a guard.
+And "the pipeline is green and the app responds" is not "the
+deployment worked": rolling updates and service selectors can conspire
+to make a failed rollout look like a successful one. Rebuild-from-zero
+is the audit that can't be fooled.
 
 ## Rebuild Ritual
 
@@ -308,6 +357,9 @@ and a fresh cluster reconciles to it.
 The control plane is free, node ~$153/mo if left running, destroy-between-sessions makes a 2-hour session ~$0.42.
 A forgotten cluster left running overnight = ~$2.51 
 State storage + shared ACR (Basic) persist at ~$5-6/mo total. -->
+
+Container Insights adds two agent pods(`ama-logs` DaemonSet and ReplicaSet), using about 22m CPU
+and 350Mi memory combined on the single node, plus Log Analytics ingestion charges, which stay small under the destroy-between-sessions workflow.
 
 ## Repo Structure
 

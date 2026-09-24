@@ -19,6 +19,31 @@ spec:
     spec:
       containers:
         - name: app
-          image: acrcontainerdemomolly.azurecr.io/fastapi-app:9650e62588f89bc2052b22ecc21e361928aef27b
+          image: acrcontainerdemomolly.azurecr.io/fastapi-app:dee6985ca06585cdf9c0e3dd20646859e39af26e
           ports:
             - containerPort: 8000
+          # Requests from observed idle usage (2m CPU, 47Mi) plus headroom.
+          # CPU request sized so HPA utilization is meaningful under load.
+          # Memory limit caps leaks; no CPU limit, to avoid throttling.
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 128Mi
+          # Readiness gates traffic: a pod joins the Service only once /health
+          # responds, so rolling updates never route to a starting pod.
+          # Liveness restarts a hung process; it checks only the app itself.
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 3 

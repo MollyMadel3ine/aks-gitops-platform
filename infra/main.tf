@@ -40,6 +40,11 @@ resource "azurerm_kubernetes_cluster" "main" {
     network_plugin_mode = "overlay"
   }
 
+  oms_agent {
+    log_analytics_workspace_id      = azurerm_log_analytics_workspace.aks.id
+    msi_auth_for_monitoring_enabled = true
+  }
+
   tags = var.tags
 }
 
