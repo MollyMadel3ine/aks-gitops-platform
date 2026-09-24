@@ -31,4 +31,19 @@ spec:
               memory: 64Mi
             limits:
               memory: 128Mi
-
+          # Readiness gates traffic: a pod joins the Service only once /health
+          # responds, so rolling updates never route to a starting pod.
+          # Liveness restarts a hung process; it checks only the app itself.
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 3 
