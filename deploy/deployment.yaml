@@ -22,3 +22,13 @@ spec:
           image: acrcontainerdemomolly.azurecr.io/fastapi-app:2b0a15314f21b248e397b27fae6f5af04672057c
           ports:
             - containerPort: 8000
+          # Requests from observed idle usage (2m CPU, 47Mi) plus headroom.
+          # CPU request sized so HPA utilization is meaningful under load.
+          # Memory limit caps leaks; no CPU limit, to avoid throttling.
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 128Mi
+
