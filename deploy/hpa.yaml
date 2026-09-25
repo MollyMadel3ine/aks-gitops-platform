@@ -1,7 +1,7 @@
 # Scales demo-app on CPU utilization, measured against the 50m request.
 # minReplicas keep the same floor, the manifest's replicas: 2 used to set;
 # maxReplicas is bounded by the single node's capacity
-apiVersion: autoscaling.v2
+apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: demo-app
