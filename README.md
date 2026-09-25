@@ -338,6 +338,36 @@ deployment worked": rolling updates and service selectors can conspire
 to make a failed rollout look like a successful one. Rebuild-from-zero
 is the audit that can't be fooled.
 
+### DCR `InvalidPayload` on rebuild, cleared on retry with unchanged code: 
+
+**Symptom:** A from-zero `terraform apply` failed at creating the Container Insights data collection rule:
+`InvalidPayload: Data collection rule is invalid` (HTTP 400). The same `monitoring.tf` had applied cleanly the day before. Every other reource, including the cluster and the Log Analytics workspace, created successfully.
+
+**Cause (most likely, unproven):** The workspace and the DCR were created in the same run, seconds apart. Terraform waits for ARM to report the workspace as created, but the Az Monitor service that validates the DCR's destination can lag behind that report. A contributing factor: the workspace had been destroyed the previous evening, and Log Analytics keeps deleted workspaces in a soft-delete state for 14 days. Recreating a wrokspace with the same name in the same resource group recovers the soft-deleted one rather than creating a new one, which can take longer to become fully usable. The first-apply of this code involved neither situation, which is why it succeeded.
+
+**Fix:** None needed in code. A failed apply does not roll back; Terraform keeps what succeeded and records it in state. `terraform state list` showed 6 of 8 resources present, and a second `terraform apply` planned only the two missing ones (the DCR and its association). Both created in about two seconds each.
+
+**Lesson:** When a resource fails on a rebuild with code that previously applied cleanly, suspect the environment before the config. Confirm the code is unchanged(`git status`, `git log -- <file>`), check what state already holds, and retry once. If the retry failes the same way, check the dependency's provisioning state directly (`az monitor log-analytics workspace show --query provisioningState`) rather than retrying again. 
+
+### Spurious in-place update: AKS node pool `upgrade_settings`
+
+**Symptom:** After the partial apply above, the retry plan show `2 to add, 1 to change`. The change was an in-place update to `azurerm_kubernetes_cluster.main`, removing an `upgrade settings` block from the `default_node_pool`: 
+`max_surge = "10%" -> null`, `drain_timeout_in_minutes = 0 -> null`, `node_soak_duration_in_minutes = 0 -> null`
+
+**Cause:** The Terraform code never declared `upgrade_settings`. When AKS created the node pool, Azure applied its own defaults for those settings. Terraform then saw values in Azure that were absent from the code and planned to remove them. Nothing about the cluster had actually changed. Left alone, this becomes a perpetual diff: Terraform nulls the settings, Azure restores its defaults, and every future plan shows the same change.
+
+**Fix:** Declared Azure's defaults explicitly in `default_node_pool`:
+  
+    upgrade_settings {
+      max_surge                     = "10%"
+      drain_timeout_in_minutes      = 0
+      node_soak_duration_in_minutes = 0
+    }
+
+The next plan showed `2 to add, 0 to change`, and a post apply plan reported no changes.
+
+**Lesson:** An unexpected in-place change on a freshly created resource is usually provider default drift, not real drift. It's still worth reading before approving: the diff shows exactly which values Azure filled in, and declaring them makes the code describe what is actually running. This pattern recurs across many Az resources wherever the API sets defaults the Terraform config doesn't mention.
+
 ## Rebuild Ritual
 
 Destroying the environment costs nothing to undo: two commands and ~10 minutes stand between an empty subscription
