@@ -29,6 +29,13 @@ resource "azurerm_kubernetes_cluster" "main" {
     name       = "system"
     node_count = 1
     vm_size    = "Standard_D2s_v3"
+    # Declared explicitly to match the AKS defaults; without this block, every plan 
+    # shows a spurious in-place update removing them. 
+    upgrade_settings {
+      max_surge                     = "10%"
+      drain_timeout_in_minutes      = 0
+      node_soak_duration_in_minutes = 0
+    }
   }
 
   identity {
