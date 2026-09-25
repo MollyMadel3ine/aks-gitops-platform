@@ -8,7 +8,7 @@ metadata:
   name: demo-app
   namespace: demo
 spec:
-  replicas: 2
+  replicas: 
   selector:
     matchLabels:
       app: demo-app
