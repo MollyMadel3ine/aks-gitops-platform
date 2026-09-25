@@ -68,6 +68,109 @@ A code push to `app/**` reaches the cluster with no human touching kubectl: CI b
 *The workflow-opened pull request changes exactly one line - the image tag, old SHA to new - so every deployment lands as a reviewed diff.*
 
 
+## Phase 4: Production Readiness
+
+Phase 4 adds the four things Kubernetes workload needs before it can be called production-shaped: observability, resource management, health checking and autoscaling.Monitoring shows real usage, real usage sets the requests, the requests are what the autoscaler measures against, and the probes keep traffic away from pods that aren't ready during a scale-out.
+
+All infrastructure chanfges went through Terraform, and all workload changes went through Git and Flux. Nothing was configured in the portal or applied with `kubectl apply`
+
+### Container Insights
+
+`infra/monitoring.tf` defines three resources:
+
+  1. **A Log Analytics workspace** that stores collected data, with 30-day retention. It lives in the cluster's resource group, so `terraform destroy` removes it with everything else.
+  2. **A data collection rule (DCR)** that defines what gets collected: the default Container Insights group (node and pod metrics, container logs, Kubernetes events) every minute, from all namespaces, in the ContainerLogV2.
+  3. **A DCR association** that links the rule to the cluster.
+
+The `oms_agent` block on the cluster enables th monitoring agent with `msi_auth_for_monitoring_enabled = true`, so the agent authenticates with managed identity instead of workspace keys. That continues the repo's no-stored-credentials design, and it's the mode that requires the DCR.
+
+**Capacity cost:** the two monitoring agent pods (`ama_logs` DaemonSet and ReplicaSet) use about 22m CPU and 350Mi memory together. On a single D2s_v3 node, that's real headroom taken form the workload, and it's one of the inputs to the HPA's replica ceiling below.
+
+### Resource requests and limits
+
+Values were set from measured usage. At idle, each app pod used
+about 2–4m CPU and 48Mi memory (`kubectl top pods`).
+
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        memory: 128Mi
+
+1. **Requests** reserve capacity for scheduling. The 50m CPU request leaves
+   room above idle usage and gives the HPA a meaningful baseline to measure
+   against.
+2. **The memory limit** is set at twice the request. A container that
+   exceeds it is killed and restarted (`OOMKilled`), which protects the
+   other pods on the node from a memory leak.
+3. **There is deliberately no CPU limit.** A container over a CPU limit
+   isn't killed, it's throttled, and throttling shows up as slow responses
+   that are hard to diagnose. Without a limit, the pod can use idle CPU on
+   the node, while the request still guarantees its share under contention.
+
+### Readiness and liveness probes
+
+Both probes call the app's existing `/health` endpoint on port 8000.
+
+| Probe     | Initial delay | Period | Failure action                          |
+|-----------|---------------|--------|-----------------------------------------|
+| Readiness | 5s            | 5s     | Pod removed from Service endpoints      |
+| Liveness  | 15s           | 10s    | Container restarted                     |
+
+1. **Readiness** answers "can this pod take traffic?" During a rolling
+   update or an HPA scale-out, a new pod receives no traffic until it
+   passes. Without it, Kubernetes sends requests as soon as the container
+   starts, before the app inside has finished starting.
+2. **Liveness** answers "is this pod broken?" It starts later than readiness
+   so a slow startup isn't mistaken for a hung process.
+3. **Liveness checks only the app itself.** If it checked a dependency like a
+   database, a database outage would make Kubernetes restart every pod
+   repeatedly, which wouldn't fix the database and would slow recovery.
+
+### Horizontal Pod Autoscaler
+
+`deploy/hpa.yaml` scales the Deployment on CPU utilization:
+
+1. **Target: 70% of the 50m request**, so scale-out begins when average CPU
+   passes 35m per pod.
+2. **Minimum: 2 replicas**, the same floor the Deployment's fixed
+   `replicas: 2` used to set. That line was removed in the same pull request.
+   If both the Deployment and the HPA set the replica count, Flux resets it
+   on every reconcile and fights the autoscaler.
+3. **Maximum: 5 replicas**, bounded by the single node's capacity after
+   system and monitoring pods.
+
+**Load test:** a `busybox` pod inside the cluster called `/health` in a tight
+loop, keeping traffic on the cluster network with no public endpoint needed.
+
+![HPA scaling out under load](docs/images/hpa-01-scale-out.png)
+
+*Under load, CPU rose to 329% of target and the HPA scaled from 2 to
+5 replicas.*
+
+![HPA scaling back down](docs/images/hpa-02-scale-down.png)
+
+*After the load stopped, the HPA waited through its default 5-minute
+stabilization window, then returned to 2 replicas. The window prevents a
+brief traffic dip from removing pods that are about to be needed again.*
+
+**A safety property worth noting:** the first HPA manifest had a one-character
+typo in its `apiVersion`. Flux's server-side dry-run rejected it, and because
+Flux applies the `deploy/` folder as a unit, it applied nothing from that
+commit. The running workload was unaffected until the corrected manifest
+merged. A bad commit stopped at the door instead of reaching the cluster.
+
+### What production would add
+
+1. **Cluster autoscaler.** The HPA adds pods, but on a single node it hits
+   a capacity ceiling. The cluster autoscaler adds nodes when pods can't be
+   scheduled, and the two together give real elasticity.
+2. **Alerting on Container Insights data**, such as restart counts or
+   sustained high memory, routed to an action group.
+3. **A dedicated user node pool**, so application pods don't share the
+   system node pool with cluster components.
+
 ## Design Decisions
 
 
